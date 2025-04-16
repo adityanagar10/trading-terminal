@@ -6,85 +6,11 @@ import (
 	"log"
 	"time"
 
+	colors "github.com/adityanagar10/trader/constants"
+	models "github.com/adityanagar10/trader/models"
 	rl "github.com/gen2brain/raylib-go/raylib"
 	"github.com/gorilla/websocket"
 )
-
-// Color theme based on the Market Monkey screenshot
-var (
-	colorBackground = rl.NewColor(21, 25, 30, 255)    // Dark background
-	colorPanelBg    = rl.NewColor(28, 32, 38, 255)    // Slightly lighter panel background
-	colorHeaderBg   = rl.NewColor(32, 36, 43, 255)    // Header background
-	colorBorder     = rl.NewColor(45, 49, 55, 255)    // Border color
-	colorText       = rl.NewColor(210, 210, 210, 255) // Main text color
-	colorSubtext    = rl.NewColor(140, 145, 155, 255) // Subtitle/label text
-	colorGreen      = rl.NewColor(75, 201, 155, 255)  // Green for positive/buy
-	colorRed        = rl.NewColor(229, 78, 103, 255)  // Red for negative/sell
-	colorHighlight  = rl.NewColor(86, 180, 233, 255)  // Highlight blue
-	colorChartBg    = rl.NewColor(25, 29, 34, 255)    // Chart background
-)
-
-// Deribit API structures
-type DeribitRequest struct {
-	JsonRPC string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params"`
-	ID      int         `json:"id"`
-}
-
-type OrderBookParams struct {
-	InstrumentName string `json:"instrument_name"`
-}
-
-type DeribitResponse struct {
-	JsonRPC string           `json:"jsonrpc"`
-	ID      int              `json:"id"`
-	Result  *OrderBookResult `json:"result,omitempty"`
-	Error   *DeribitError    `json:"error,omitempty"`
-	UsIn    int64            `json:"usIn,omitempty"`
-	UsOut   int64            `json:"usOut,omitempty"`
-	UsDiff  int              `json:"usDiff,omitempty"`
-	Testnet bool             `json:"testnet,omitempty"`
-}
-
-type DeribitError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-type OrderBookStats struct {
-	High           float64 `json:"high"`
-	Low            float64 `json:"low"`
-	PriceChange    float64 `json:"price_change"`
-	Volume         float64 `json:"volume"`
-	VolumeUSD      float64 `json:"volume_usd"`
-	VolumeNotional float64 `json:"volume_notional"`
-}
-
-type OrderBookResult struct {
-	Timestamp        int64          `json:"timestamp"`
-	State            string         `json:"state"`
-	Stats            OrderBookStats `json:"stats"`
-	ChangeID         int64          `json:"change_id"`
-	IndexPrice       float64        `json:"index_price"`
-	InstrumentName   string         `json:"instrument_name"`
-	Bids             [][]float64    `json:"bids"`
-	Asks             [][]float64    `json:"asks"`
-	LastPrice        float64        `json:"last_price"`
-	SettlementPrice  float64        `json:"settlement_price"`
-	MinPrice         float64        `json:"min_price"`
-	MaxPrice         float64        `json:"max_price"`
-	OpenInterest     float64        `json:"open_interest"`
-	MarkPrice        float64        `json:"mark_price"`
-	InterestValue    float64        `json:"interest_value"`
-	BestAskPrice     float64        `json:"best_ask_price"`
-	BestBidPrice     float64        `json:"best_bid_price"`
-	EstDeliveryPrice float64        `json:"estimated_delivery_price"`
-	BestAskAmount    float64        `json:"best_ask_amount"`
-	BestBidAmount    float64        `json:"best_bid_amount"`
-	CurrentFunding   float64        `json:"current_funding"`
-	Funding8h        float64        `json:"funding_8h"`
-}
 
 // Window struct for UI
 type Window struct {
@@ -154,12 +80,12 @@ func (w *Window) Update(windows []*Window) {
 
 func (w *Window) Draw() {
 	// Draw window background
-	rl.DrawRectangleRec(w.rect, colorPanelBg)
+	rl.DrawRectangleRec(w.rect, colors.ColorPanelBg)
 
 	// Draw window border with different color if active
-	borderColor := colorBorder
+	borderColor := colors.ColorBorder
 	if w.isActive {
-		borderColor = colorHighlight
+		borderColor = colors.ColorHighlight
 	}
 	rl.DrawRectangleLinesEx(w.rect, 1, borderColor)
 
@@ -170,7 +96,16 @@ func (w *Window) Draw() {
 		Width:  w.rect.Width,
 		Height: 30,
 	}
-	rl.DrawRectangleRec(headerRect, colorHeaderBg)
+	rl.DrawRectangleRec(headerRect, colors.ColorHeaderBg)
+	rl.DrawRectangleLinesEx(w.rect, 1, borderColor)
+
+	// Draw header bottom border line
+	rl.DrawLine(
+		int32(headerRect.X),
+		int32(headerRect.Y+headerRect.Height),
+		int32(headerRect.X+headerRect.Width),
+		int32(headerRect.Y+headerRect.Height),
+		borderColor)
 
 	// Draw title text
 	rl.DrawText(
@@ -178,7 +113,7 @@ func (w *Window) Draw() {
 		int32(w.rect.X+10),
 		int32(w.rect.Y+8),
 		18,
-		colorText,
+		colors.ColorText,
 	)
 
 	// Draw content
@@ -197,14 +132,14 @@ func (w *Window) Draw() {
 
 // Render order book with real data in the Market Monkey style
 func renderOrderBook(w *Window) {
-	orderBook, ok := w.data.(*OrderBookResult)
+	orderBook, ok := w.data.(*models.OrderBookResult)
 	if !ok || orderBook == nil {
 		// Render placeholder if no data available
 		rl.DrawText("Loading order book...",
 			int32(w.rect.X+10),
 			int32(w.rect.Y+40),
 			18,
-			colorSubtext)
+			colors.ColorSubtext)
 		return
 	}
 
@@ -220,11 +155,11 @@ func renderOrderBook(w *Window) {
 	startY += 30
 
 	// Draw price information in a more compact format
-	priceChangeColor := colorSubtext
+	priceChangeColor := colors.ColorSubtext
 	if orderBook.Stats.PriceChange < 0 {
-		priceChangeColor = colorRed
+		priceChangeColor = colors.ColorRed
 	} else if orderBook.Stats.PriceChange > 0 {
-		priceChangeColor = colorGreen
+		priceChangeColor = colors.ColorGreen
 	}
 
 	// Last price row
@@ -232,24 +167,24 @@ func renderOrderBook(w *Window) {
 		int32(w.rect.X+10),
 		int32(startY),
 		16,
-		colorSubtext)
+		colors.ColorSubtext)
 	rl.DrawText(fmt.Sprintf("%.2f", orderBook.LastPrice),
 		int32(w.rect.X+70),
 		int32(startY),
 		16,
-		colorText)
+		colors.ColorText)
 
 	// Mark price
 	rl.DrawText("Mark:",
 		int32(w.rect.X+150),
 		int32(startY),
 		16,
-		colorSubtext)
+		colors.ColorSubtext)
 	rl.DrawText(fmt.Sprintf("%.2f", orderBook.MarkPrice),
 		int32(w.rect.X+210),
 		int32(startY),
 		16,
-		colorText)
+		colors.ColorText)
 	startY += 22
 
 	// 24h change row
@@ -257,7 +192,7 @@ func renderOrderBook(w *Window) {
 		int32(w.rect.X+10),
 		int32(startY),
 		16,
-		colorSubtext)
+		colors.ColorSubtext)
 	rl.DrawText(fmt.Sprintf("%.2f%%", orderBook.Stats.PriceChange),
 		int32(w.rect.X+70),
 		int32(startY),
@@ -265,18 +200,18 @@ func renderOrderBook(w *Window) {
 		priceChangeColor)
 
 	// Funding
-	fundingColor := colorSubtext
+	fundingColor := colors.ColorSubtext
 	if orderBook.Funding8h < 0 {
-		fundingColor = colorGreen
+		fundingColor = colors.ColorGreen
 	} else if orderBook.Funding8h > 0 {
-		fundingColor = colorRed
+		fundingColor = colors.ColorRed
 	}
 
 	rl.DrawText("Funding:",
 		int32(w.rect.X+150),
 		int32(startY),
 		16,
-		colorSubtext)
+		colors.ColorSubtext)
 	rl.DrawText(fmt.Sprintf("%.4f%%", orderBook.Funding8h*100),
 		int32(w.rect.X+210),
 		int32(startY),
@@ -290,13 +225,13 @@ func renderOrderBook(w *Window) {
 		int32(startY),
 		int32(w.rect.X+w.rect.Width-10),
 		int32(startY),
-		colorBorder)
+		colors.ColorBorder)
 	startY += 15
 
 	// Draw order book headers
-	rl.DrawText("Price", int32(w.rect.X+10), int32(startY), 16, colorSubtext)
-	rl.DrawText("Amount", int32(w.rect.X+120), int32(startY), 16, colorSubtext)
-	rl.DrawText("Total", int32(w.rect.X+220), int32(startY), 16, colorSubtext)
+	rl.DrawText("Price", int32(w.rect.X+10), int32(startY), 16, colors.ColorSubtext)
+	rl.DrawText("Amount", int32(w.rect.X+120), int32(startY), 16, colors.ColorSubtext)
+	rl.DrawText("Total", int32(w.rect.X+220), int32(startY), 16, colors.ColorSubtext)
 	startY += 25
 
 	// Calculate max volume for visualization
@@ -343,21 +278,21 @@ func renderOrderBook(w *Window) {
 				int32(w.rect.X+10),
 				int32(startY),
 				16,
-				colorRed,
+				colors.ColorRed,
 			)
 			rl.DrawText(
 				fmt.Sprintf("%.0f", amount),
 				int32(w.rect.X+120),
 				int32(startY),
 				16,
-				colorRed,
+				colors.ColorRed,
 			)
 			rl.DrawText(
 				fmt.Sprintf("%.0f", totalAsks),
 				int32(w.rect.X+220),
 				int32(startY),
 				16,
-				colorRed,
+				colors.ColorRed,
 			)
 			startY += 20
 		}
@@ -379,7 +314,7 @@ func renderOrderBook(w *Window) {
 		int32(w.rect.X+10),
 		int32(startY+4),
 		16,
-		colorText,
+		colors.ColorText,
 	)
 	startY += 30
 
@@ -414,21 +349,21 @@ func renderOrderBook(w *Window) {
 				int32(w.rect.X+10),
 				int32(startY),
 				16,
-				colorGreen,
+				colors.ColorGreen,
 			)
 			rl.DrawText(
 				fmt.Sprintf("%.0f", amount),
 				int32(w.rect.X+120),
 				int32(startY),
 				16,
-				colorGreen,
+				colors.ColorGreen,
 			)
 			rl.DrawText(
 				fmt.Sprintf("%.0f", totalBids),
 				int32(w.rect.X+220),
 				int32(startY),
 				16,
-				colorGreen,
+				colors.ColorGreen,
 			)
 			startY += 20
 		}
@@ -486,7 +421,7 @@ func (c *DeribitClient) handleMessages() {
 		}
 
 		// Parse the response
-		var response DeribitResponse
+		var response models.DeribitResponse
 		if err := json.Unmarshal(message, &response); err != nil {
 			log.Printf("Failed to unmarshal response: %v", err)
 			continue
@@ -508,11 +443,11 @@ func (c *DeribitClient) handleMessages() {
 
 func (c *DeribitClient) fetchOrderBook() {
 	// Create an order book request
-	request := DeribitRequest{
+	request := models.DeribitRequest{
 		JsonRPC: "2.0",
 		ID:      c.requestID,
 		Method:  "public/get_order_book",
-		Params: OrderBookParams{
+		Params: models.OrderBookParams{
 			InstrumentName: c.instrument,
 		},
 	}
@@ -543,15 +478,22 @@ func (c *DeribitClient) fetchOrderBookPeriodically() {
 // UI components
 func drawTopBar() {
 	// Draw top navigation bar
-	rl.DrawRectangle(0, 0, int32(rl.GetScreenWidth()), 30, colorHeaderBg)
-	rl.DrawLine(0, 30, int32(rl.GetScreenWidth()), 30, colorBorder)
+	rl.DrawRectangle(0, 0, int32(rl.GetScreenWidth()), 30, colors.ColorHeaderBg)
+	rl.DrawLine(0, 30, int32(rl.GetScreenWidth()), 30, colors.ColorBorder)
 
 	// Draw navigation buttons
+	navItems := []string{"Orderbooks"}
+	xPos := 20
+
+	for _, item := range navItems {
+		rl.DrawText(item, int32(xPos), 8, 18, colors.ColorText)
+		xPos += int(rl.MeasureText(item, 18) + 30)
+	}
 
 	// Draw title on the right
 	title := "Go Trader"
 	titleWidth := rl.MeasureText(title, 18)
-	rl.DrawText(title, int32(rl.GetScreenWidth())-int32(titleWidth)-20, 8, 18, colorText)
+	rl.DrawText(title, int32(rl.GetScreenWidth())-int32(titleWidth)-20, 8, 18, colors.ColorText)
 }
 
 func drawStatusBar() {
@@ -562,7 +504,7 @@ func drawStatusBar() {
 		int32(rl.GetScreenHeight())-statusBarHeight,
 		int32(rl.GetScreenWidth()),
 		statusBarHeight,
-		colorHeaderBg,
+		colors.ColorHeaderBg,
 	)
 
 	// Draw status text
@@ -572,7 +514,7 @@ func drawStatusBar() {
 		10,
 		int32(rl.GetScreenHeight())-statusBarHeight+5,
 		16,
-		colorSubtext,
+		colors.ColorSubtext,
 	)
 
 	// Draw timestamp on the right
@@ -583,13 +525,13 @@ func drawStatusBar() {
 		int32(rl.GetScreenWidth())-int32(timeWidth)-10,
 		int32(rl.GetScreenHeight())-statusBarHeight+5,
 		16,
-		colorSubtext,
+		colors.ColorSubtext,
 	)
 }
 
 func main() {
 	rl.SetConfigFlags(rl.FlagWindowResizable)
-	rl.InitWindow(1280, 800, "Go Trader")
+	rl.InitWindow(500, 500, "Go Trader")
 	rl.SetTargetFPS(60)
 
 	// Set custom font for a more modern look
@@ -599,7 +541,7 @@ func main() {
 	rl.SetTextureFilter(font.Texture, rl.FilterBilinear)
 
 	// Create order book window
-	orderBookWindow := NewWindow("BTC-PERPETUAL", 350, 50, 300, 600, renderOrderBook)
+	orderBookWindow := NewWindow("Orderbook: BTC-PERPETUAL", 350, 50, 300, 600, renderOrderBook)
 	orderBookWindow.isActive = true
 
 	// Create empty windows for chart and depth
@@ -627,7 +569,7 @@ func main() {
 
 		// Draw
 		rl.BeginDrawing()
-		rl.ClearBackground(colorBackground)
+		rl.ClearBackground(colors.ColorBackground)
 
 		// Draw UI elements
 		drawTopBar()
