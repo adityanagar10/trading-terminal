@@ -1,240 +1,82 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
+	"github.com/adityanagar10/trader/client"
+	"github.com/adityanagar10/trader/components"
 	colors "github.com/adityanagar10/trader/constants"
-	models "github.com/adityanagar10/trader/models"
+	"github.com/adityanagar10/trader/models"
 	rl "github.com/gen2brain/raylib-go/raylib"
-	"github.com/gorilla/websocket"
 )
 
-// Window struct for UI
-type Window struct {
-	title      string
-	rect       rl.Rectangle
-	isDragging bool
-	dragOffset rl.Vector2
-	content    func(*Window) // Function to render window content
-	data       interface{}   // Generic data field for window content
-	isActive   bool          // Whether this window is currently active/focused
-}
-
-func NewWindow(title string, x, y, width, height float32, contentFunc func(*Window)) *Window {
-	return &Window{
-		title:    title,
-		rect:     rl.NewRectangle(x, y, width, height),
-		content:  contentFunc,
-		isActive: false,
+func NewWindow(title string, x, y, width, height float32, contentFunc func(*models.Window), font rl.Font) *models.Window {
+	return &models.Window{
+		Title:            title,
+		Rect:             rl.NewRectangle(x, y, width, height),
+		Content:          contentFunc,
+		IsActive:         false,
+		ScrollPosition:   0,
+		IsResizing:       false,
+		ResizeDir:        0,
+		ResizeHandleSize: 10,
+		Padding:          12,
+		Font:             font,
 	}
 }
 
-func (w *Window) Update(windows []*Window) {
-	mousePos := rl.GetMousePosition()
-
-	// Header/title bar area
-	headerRect := rl.Rectangle{
-		X:      w.rect.X,
-		Y:      w.rect.Y,
-		Width:  w.rect.Width,
-		Height: 30,
-	}
-
-	// Check if clicked on this window to make it active
-	if rl.CheckCollisionPointRec(mousePos, w.rect) && rl.IsMouseButtonPressed(rl.MouseLeftButton) {
-		// Make this window active and all others inactive
-		for _, win := range windows {
-			win.isActive = false
-		}
-		w.isActive = true
-	}
-
-	// Dragging logic
-	if rl.CheckCollisionPointRec(mousePos, headerRect) {
-		if rl.IsMouseButtonPressed(rl.MouseLeftButton) {
-			w.isDragging = true
-			w.dragOffset = rl.Vector2{
-				X: mousePos.X - w.rect.X,
-				Y: mousePos.Y - w.rect.Y,
-			}
-			// Make this window active and all others inactive
-			for _, win := range windows {
-				win.isActive = false
-			}
-			w.isActive = true
-		}
-	}
-
-	if w.isDragging {
-		if rl.IsMouseButtonDown(rl.MouseLeftButton) {
-			w.rect.X = mousePos.X - w.dragOffset.X
-			w.rect.Y = mousePos.Y - w.dragOffset.Y
-		} else {
-			w.isDragging = false
-		}
-	}
-}
-
-func (w *Window) Draw() {
-	// Draw window background
-	rl.DrawRectangleRec(w.rect, colors.ColorPanelBg)
-
-	// Draw window border with different color if active
-	borderColor := colors.ColorBorder
-	if w.isActive {
-		borderColor = colors.ColorHighlight
-	}
-	rl.DrawRectangleLinesEx(w.rect, 1, borderColor)
-
-	// Draw header
-	headerRect := rl.Rectangle{
-		X:      w.rect.X,
-		Y:      w.rect.Y,
-		Width:  w.rect.Width,
-		Height: 30,
-	}
-	rl.DrawRectangleRec(headerRect, colors.ColorHeaderBg)
-	rl.DrawRectangleLinesEx(w.rect, 1, borderColor)
-
-	// Draw header bottom border line
-	rl.DrawLine(
-		int32(headerRect.X),
-		int32(headerRect.Y+headerRect.Height),
-		int32(headerRect.X+headerRect.Width),
-		int32(headerRect.Y+headerRect.Height),
-		borderColor)
-
-	// Draw title text
-	rl.DrawText(
-		w.title,
-		int32(w.rect.X+10),
-		int32(w.rect.Y+8),
-		18,
-		colors.ColorText,
-	)
-
-	// Draw content
-	if w.content != nil {
-		// Set clipping to ensure content stays within window
-		rl.BeginScissorMode(
-			int32(w.rect.X),
-			int32(w.rect.Y+30),
-			int32(w.rect.Width),
-			int32(w.rect.Height-30),
-		)
-		w.content(w)
-		rl.EndScissorMode()
-	}
-}
-
-// Render order book with real data in the Market Monkey style
-func renderOrderBook(w *Window) {
-	orderBook, ok := w.data.(*models.OrderBookResult)
+// TODO: move into seperate file
+func renderOrderBook(w *models.Window) {
+	orderBook, ok := w.Data.(*models.OrderBookResult)
 	if !ok || orderBook == nil {
 		// Render placeholder if no data available
-		rl.DrawText("Loading order book...",
-			int32(w.rect.X+10),
-			int32(w.rect.Y+40),
-			18,
+		rl.DrawTextEx(
+			w.Font,
+			"Loading order book...",
+			rl.Vector2{X: w.Rect.X + w.Padding, Y: w.Rect.Y + 35},
+			16,
+			1,
 			colors.ColorSubtext)
 		return
 	}
 
-	startY := w.rect.Y + 40
-
-	// // Draw instrument name
-	// instrumentText := fmt.Sprintf("%s", orderBook.InstrumentName)
-	// rl.DrawText(instrumentText,
-	// 	int32(w.rect.X+10),
-	// 	int32(startY),
-	// 	18,
-	// 	colorHighlight)
-	startY += 30
-
-	// Draw price information in a more compact format
-	priceChangeColor := colors.ColorSubtext
-	if orderBook.Stats.PriceChange < 0 {
-		priceChangeColor = colors.ColorRed
-	} else if orderBook.Stats.PriceChange > 0 {
-		priceChangeColor = colors.ColorGreen
+	// Use fixed-width columns for terminal style appearance
+	numAsks := len(orderBook.Asks)
+	if numAsks > 20 {
+		numAsks = 20
 	}
 
-	// Last price row
-	rl.DrawText("Last:",
-		int32(w.rect.X+10),
-		int32(startY),
-		16,
-		colors.ColorSubtext)
-	rl.DrawText(fmt.Sprintf("%.2f", orderBook.LastPrice),
-		int32(w.rect.X+70),
-		int32(startY),
-		16,
-		colors.ColorText)
-
-	// Mark price
-	rl.DrawText("Mark:",
-		int32(w.rect.X+150),
-		int32(startY),
-		16,
-		colors.ColorSubtext)
-	rl.DrawText(fmt.Sprintf("%.2f", orderBook.MarkPrice),
-		int32(w.rect.X+210),
-		int32(startY),
-		16,
-		colors.ColorText)
-	startY += 22
-
-	// 24h change row
-	rl.DrawText("24h:",
-		int32(w.rect.X+10),
-		int32(startY),
-		16,
-		colors.ColorSubtext)
-	rl.DrawText(fmt.Sprintf("%.2f%%", orderBook.Stats.PriceChange),
-		int32(w.rect.X+70),
-		int32(startY),
-		16,
-		priceChangeColor)
-
-	// Funding
-	fundingColor := colors.ColorSubtext
-	if orderBook.Funding8h < 0 {
-		fundingColor = colors.ColorGreen
-	} else if orderBook.Funding8h > 0 {
-		fundingColor = colors.ColorRed
+	numBids := len(orderBook.Bids)
+	if numBids > 20 {
+		numBids = 20
 	}
 
-	rl.DrawText("Funding:",
-		int32(w.rect.X+150),
-		int32(startY),
-		16,
-		colors.ColorSubtext)
-	rl.DrawText(fmt.Sprintf("%.4f%%", orderBook.Funding8h*100),
-		int32(w.rect.X+210),
-		int32(startY),
-		16,
-		fundingColor)
-	startY += 30
+	contentHeight := float32(45 + (numAsks+numBids)*20 + 30) // Header + rows + spread row
+	w.MaxScroll = contentHeight - (w.Rect.Height - 30)
+	if w.MaxScroll < 0 {
+		w.MaxScroll = 0
+	}
 
-	// Divider line
-	rl.DrawLine(
-		int32(w.rect.X+10),
-		int32(startY),
-		int32(w.rect.X+w.rect.Width-10),
-		int32(startY),
-		colors.ColorBorder)
-	startY += 15
+	startY := w.Rect.Y + 35 - w.ScrollPosition
 
-	// Draw order book headers
-	rl.DrawText("Price", int32(w.rect.X+10), int32(startY), 16, colors.ColorSubtext)
-	rl.DrawText("Amount", int32(w.rect.X+120), int32(startY), 16, colors.ColorSubtext)
-	rl.DrawText("Total", int32(w.rect.X+220), int32(startY), 16, colors.ColorSubtext)
-	startY += 25
+	// Draw column headers with monospaced font (terminal style)
+	headerColor := colors.ColorSubtext
+	rowSpacing := float32(20) // Space between rows
 
-	// Calculate max volume for visualization
+	// Column positions - consistent with terminal style fixed-width columns
+	priceX := w.Rect.X + w.Padding
+	amountX := w.Rect.X + w.Padding + 120
+	totalX := w.Rect.X + w.Padding + 220
+
+	// Draw column headers
+	rl.DrawTextEx(w.Font, "Price", rl.Vector2{X: priceX, Y: startY}, 16, 1, headerColor)
+	rl.DrawTextEx(w.Font, "Amount", rl.Vector2{X: amountX, Y: startY}, 16, 1, headerColor)
+	rl.DrawTextEx(w.Font, "Total", rl.Vector2{X: totalX, Y: startY}, 16, 1, headerColor)
+	startY += rowSpacing + 5
+
+	// Calculate max volume for visualization (subtle volume bars like in image 2)
 	maxVolume := 0.0
 	for _, ask := range orderBook.Asks {
 		if len(ask) >= 2 && ask[1] > maxVolume {
@@ -247,14 +89,8 @@ func renderOrderBook(w *Window) {
 		}
 	}
 
-	// Display asks (from lowest to highest)
-	maxDisplayItems := 12
+	// Display asks (from lowest to highest) - RED
 	totalAsks := 0.0
-
-	numAsks := len(orderBook.Asks)
-	if numAsks > maxDisplayItems {
-		numAsks = maxDisplayItems
-	}
 
 	for i := numAsks - 1; i >= 0; i-- {
 		ask := orderBook.Asks[i]
@@ -263,69 +99,56 @@ func renderOrderBook(w *Window) {
 			amount := ask[1]
 			totalAsks += amount
 
-			// Draw volume visualization bar
-			barWidth := (amount / maxVolume) * 150
+			// Draw subtle volume bar (similar to image 2)
+			barWidth := (amount / maxVolume) * float64((w.Rect.Width - 50 - w.Padding*2))
 			barRect := rl.Rectangle{
-				X:      w.rect.X + w.rect.Width - 10 - float32(barWidth),
-				Y:      startY - 2,
+				X:      w.Rect.X + w.Rect.Width - float32(barWidth) - w.Padding,
+				Y:      startY,
 				Width:  float32(barWidth),
-				Height: 18,
+				Height: 16,
 			}
-			rl.DrawRectangleRec(barRect, rl.NewColor(229, 78, 103, 50)) // Semi-transparent red
+			rl.DrawRectangleRec(barRect, rl.NewColor(229, 78, 103, 40)) // Very subtle red background
 
-			rl.DrawText(
-				fmt.Sprintf("%.2f", price),
-				int32(w.rect.X+10),
-				int32(startY),
-				16,
-				colors.ColorRed,
-			)
-			rl.DrawText(
-				fmt.Sprintf("%.0f", amount),
-				int32(w.rect.X+120),
-				int32(startY),
-				16,
-				colors.ColorRed,
-			)
-			rl.DrawText(
-				fmt.Sprintf("%.0f", totalAsks),
-				int32(w.rect.X+220),
-				int32(startY),
-				16,
-				colors.ColorRed,
-			)
-			startY += 20
+			// Draw text with monospaced font
+			rl.DrawTextEx(w.Font, fmt.Sprintf("%.2f", price), rl.Vector2{X: priceX, Y: startY}, 16, 1, colors.ColorRed)
+			rl.DrawTextEx(w.Font, fmt.Sprintf("%.4f", amount), rl.Vector2{X: amountX, Y: startY}, 16, 1, colors.ColorRed)
+			rl.DrawTextEx(w.Font, fmt.Sprintf("%.4f", totalAsks), rl.Vector2{X: totalX, Y: startY}, 16, 1, colors.ColorRed)
+
+			startY += rowSpacing
 		}
 	}
 
-	// Spread row
-	spread := orderBook.BestAskPrice - orderBook.BestBidPrice
-	spreadPct := (spread / orderBook.BestBidPrice) * 100
+	// Spread row - more subtle like in image 2
+	spread := 0.0
+	spreadPct := 0.0
 
-	rl.DrawRectangle(
-		int32(w.rect.X+10),
-		int32(startY),
-		int32(w.rect.Width-20),
-		25,
-		rl.NewColor(40, 44, 52, 255))
-
-	rl.DrawText(
-		fmt.Sprintf("Spread: %.2f (%.4f%%)", spread, spreadPct),
-		int32(w.rect.X+10),
-		int32(startY+4),
-		16,
-		colors.ColorText,
-	)
-	startY += 30
-
-	// Draw bids (buy orders) - green
-	totalBids := 0.0
-
-	// Display bids (from highest to lowest)
-	numBids := len(orderBook.Bids)
-	if numBids > maxDisplayItems {
-		numBids = maxDisplayItems
+	if len(orderBook.Asks) > 0 && len(orderBook.Bids) > 0 {
+		// Calculate spread if we have both asks and bids
+		bestAskPrice := orderBook.Asks[0][0]
+		bestBidPrice := orderBook.Bids[0][0]
+		spread = bestAskPrice - bestBidPrice
+		spreadPct = (spread / bestBidPrice) * 100
 	}
+
+	// Draw spread info with a subtle background
+	rl.DrawRectangle(
+		int32(w.Rect.X+w.Padding),
+		int32(startY),
+		int32(w.Rect.Width-w.Padding*2),
+		20,
+		rl.NewColor(40, 44, 52, 100)) // Very subtle background
+
+	rl.DrawTextEx(
+		w.Font,
+		fmt.Sprintf("Spread: %.2f (%.4f%%)", spread, spreadPct),
+		rl.Vector2{X: w.Rect.X + w.Padding + 5, Y: startY + 2},
+		16,
+		1,
+		colors.ColorText)
+	startY += rowSpacing + 5
+
+	// Draw bids (buy orders) - GREEN (similar to image 2)
+	totalBids := 0.0
 
 	for i := 0; i < numBids; i++ {
 		bid := orderBook.Bids[i]
@@ -334,254 +157,165 @@ func renderOrderBook(w *Window) {
 			amount := bid[1]
 			totalBids += amount
 
-			// Draw volume visualization bar
-			barWidth := (amount / maxVolume) * 150
+			// Draw subtle volume bar
+			barWidth := (amount / maxVolume) * float64((w.Rect.Width - 50 - w.Padding*2))
 			barRect := rl.Rectangle{
-				X:      w.rect.X + w.rect.Width - 10 - float32(barWidth),
-				Y:      startY - 2,
+				X:      w.Rect.X + w.Rect.Width - float32(barWidth) - w.Padding,
+				Y:      startY,
 				Width:  float32(barWidth),
-				Height: 18,
+				Height: 16,
 			}
-			rl.DrawRectangleRec(barRect, rl.NewColor(75, 201, 155, 50)) // Semi-transparent green
+			rl.DrawRectangleRec(barRect, rl.NewColor(75, 201, 155, 40)) // Very subtle green background
 
-			rl.DrawText(
-				fmt.Sprintf("%.2f", price),
-				int32(w.rect.X+10),
-				int32(startY),
-				16,
-				colors.ColorGreen,
-			)
-			rl.DrawText(
-				fmt.Sprintf("%.0f", amount),
-				int32(w.rect.X+120),
-				int32(startY),
-				16,
-				colors.ColorGreen,
-			)
-			rl.DrawText(
-				fmt.Sprintf("%.0f", totalBids),
-				int32(w.rect.X+220),
-				int32(startY),
-				16,
-				colors.ColorGreen,
-			)
-			startY += 20
+			// Draw text with monospaced font
+			rl.DrawTextEx(w.Font, fmt.Sprintf("%.2f", price), rl.Vector2{X: priceX, Y: startY}, 16, 1, colors.ColorGreen)
+			rl.DrawTextEx(w.Font, fmt.Sprintf("%.4f", amount), rl.Vector2{X: amountX, Y: startY}, 16, 1, colors.ColorGreen)
+			rl.DrawTextEx(w.Font, fmt.Sprintf("%.4f", totalBids), rl.Vector2{X: totalX, Y: startY}, 16, 1, colors.ColorGreen)
+
+			startY += rowSpacing
 		}
 	}
 }
 
-// DeribitClient handles WebSocket communication with Deribit
-type DeribitClient struct {
-	conn            *websocket.Conn
-	orderBookWindow *Window
-	instrument      string
-	requestID       int
-}
-
-func NewDeribitClient(instrument string, orderBookWindow *Window) *DeribitClient {
-	return &DeribitClient{
-		orderBookWindow: orderBookWindow,
-		instrument:      instrument,
-		requestID:       1,
-	}
-}
-
-func (c *DeribitClient) Connect() error {
-	// Connect to Deribit WebSocket API
-	conn, _, err := websocket.DefaultDialer.Dial("wss://www.deribit.com/ws/api/v2", nil)
-	if err != nil {
-		return fmt.Errorf("websocket connection error: %v", err)
-	}
-
-	c.conn = conn
-	log.Println("Connected to Deribit WebSocket API")
-
-	// Start listening for messages
-	go c.handleMessages()
-
-	// Start fetching order book periodically
-	go c.fetchOrderBookPeriodically()
-
-	return nil
-}
-
-func (c *DeribitClient) Close() {
-	if c.conn != nil {
-		c.conn.Close()
-		log.Println("Closed Deribit WebSocket connection")
-	}
-}
-
-func (c *DeribitClient) handleMessages() {
-	for {
-		_, message, err := c.conn.ReadMessage()
-		if err != nil {
-			log.Printf("WebSocket read error: %v", err)
-			return
-		}
-
-		// Parse the response
-		var response models.DeribitResponse
-		if err := json.Unmarshal(message, &response); err != nil {
-			log.Printf("Failed to unmarshal response: %v", err)
-			continue
-		}
-
-		// Handle errors
-		if response.Error != nil {
-			log.Printf("Deribit API error: %d - %s", response.Error.Code, response.Error.Message)
-			continue
-		}
-
-		// Process order book responses
-		if response.Result != nil {
-			// Update window data directly with the complete order book result
-			c.orderBookWindow.data = response.Result
-		}
-	}
-}
-
-func (c *DeribitClient) fetchOrderBook() {
-	// Create an order book request
-	request := models.DeribitRequest{
-		JsonRPC: "2.0",
-		ID:      c.requestID,
-		Method:  "public/get_order_book",
-		Params: models.OrderBookParams{
-			InstrumentName: c.instrument,
-		},
-	}
-	c.requestID++
-
-	// Marshal and send the request
-	data, err := json.Marshal(request)
-	if err != nil {
-		log.Printf("Failed to marshal request: %v", err)
+func renderRecentTrades(w *models.Window) {
+	// Trade data could come from websocket similar to order book
+	trades, ok := w.Data.([]models.Trade)
+	if !ok || trades == nil {
+		rl.DrawTextEx(
+			w.Font,
+			"No recent trades data...",
+			rl.Vector2{X: w.Rect.X + w.Padding, Y: w.Rect.Y + 35},
+			16,
+			1,
+			colors.ColorSubtext)
 		return
 	}
 
-	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		log.Printf("Failed to send request: %v", err)
-		return
+	startY := w.Rect.Y + 35 - w.ScrollPosition
+	rowSpacing := float32(20)
+
+	// Draw column headers
+	priceX := w.Rect.X + w.Padding
+	amountX := w.Rect.X + w.Padding + 120
+	timeX := w.Rect.X + w.Padding + 220
+
+	rl.DrawTextEx(w.Font, "Price", rl.Vector2{X: priceX, Y: startY}, 16, 1, colors.ColorSubtext)
+	rl.DrawTextEx(w.Font, "Amount", rl.Vector2{X: amountX, Y: startY}, 16, 1, colors.ColorSubtext)
+	rl.DrawTextEx(w.Font, "Time", rl.Vector2{X: timeX, Y: startY}, 16, 1, colors.ColorSubtext)
+	startY += rowSpacing + 5
+
+	// Display trades
+	for _, trade := range trades {
+		// Color based on trade direction
+		textColor := colors.ColorGreen
+		if trade.Direction == "sell" {
+			textColor = colors.ColorRed
+		}
+
+		rl.DrawTextEx(w.Font, fmt.Sprintf("%.2f", trade.Price),
+			rl.Vector2{X: priceX, Y: startY}, 16, 1, textColor)
+		rl.DrawTextEx(w.Font, fmt.Sprintf("%.4f", trade.Amount),
+			rl.Vector2{X: amountX, Y: startY}, 16, 1, textColor)
+		rl.DrawTextEx(w.Font, trade.Timestamp,
+			rl.Vector2{X: timeX, Y: startY}, 16, 1, colors.ColorSubtext)
+
+		startY += rowSpacing
 	}
-}
-
-func (c *DeribitClient) fetchOrderBookPeriodically() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		c.fetchOrderBook()
-	}
-}
-
-// UI components
-func drawTopBar() {
-	// Draw top navigation bar
-	rl.DrawRectangle(0, 0, int32(rl.GetScreenWidth()), 30, colors.ColorHeaderBg)
-	rl.DrawLine(0, 30, int32(rl.GetScreenWidth()), 30, colors.ColorBorder)
-
-	// Draw navigation buttons
-	navItems := []string{"Orderbooks"}
-	xPos := 20
-
-	for _, item := range navItems {
-		rl.DrawText(item, int32(xPos), 8, 18, colors.ColorText)
-		xPos += int(rl.MeasureText(item, 18) + 30)
-	}
-
-	// Draw title on the right
-	title := "Go Trader"
-	titleWidth := rl.MeasureText(title, 18)
-	rl.DrawText(title, int32(rl.GetScreenWidth())-int32(titleWidth)-20, 8, 18, colors.ColorText)
-}
-
-func drawStatusBar() {
-	// Draw status bar at the bottom
-	statusBarHeight := int32(25)
-	rl.DrawRectangle(
-		0,
-		int32(rl.GetScreenHeight())-statusBarHeight,
-		int32(rl.GetScreenWidth()),
-		statusBarHeight,
-		colors.ColorHeaderBg,
-	)
-
-	// Draw status text
-	statusText := "Connected to Deribit | v0.1.0"
-	rl.DrawText(
-		statusText,
-		10,
-		int32(rl.GetScreenHeight())-statusBarHeight+5,
-		16,
-		colors.ColorSubtext,
-	)
-
-	// Draw timestamp on the right
-	timeText := time.Now().Format("15:04:05")
-	timeWidth := rl.MeasureText(timeText, 16)
-	rl.DrawText(
-		timeText,
-		int32(rl.GetScreenWidth())-int32(timeWidth)-10,
-		int32(rl.GetScreenHeight())-statusBarHeight+5,
-		16,
-		colors.ColorSubtext,
-	)
 }
 
 func main() {
 	rl.SetConfigFlags(rl.FlagWindowResizable)
-	rl.InitWindow(500, 500, "Go Trader")
+	rl.InitWindow(1200, 800, "Go Trader")
 	rl.SetTargetFPS(60)
 
-	// Set custom font for a more modern look
-	// You'll need to download and include a suitable monospaced font
-	// For example, "JetBrainsMono-Regular.ttf" would be good for this
 	font := rl.LoadFont("JetBrainsMono-Regular.ttf")
 	rl.SetTextureFilter(font.Texture, rl.FilterBilinear)
 
-	// Create order book window
-	orderBookWindow := NewWindow("Orderbook: BTC-PERPETUAL", 350, 50, 300, 600, renderOrderBook)
-	orderBookWindow.isActive = true
-
-	// Create empty windows for chart and depth
-	// chartWindow := NewWindow("BTC-PERPETUAL Chart", 50, 50, 280, 400, nil)
-	// depthWindow := NewWindow("BTC-PERPETUAL Depth", 680, 50, 280, 400, nil)
-
-	// Create Deribit client
-	client := NewDeribitClient("BTC-PERPETUAL", orderBookWindow)
-	err := client.Connect()
-	if err != nil {
-		log.Printf("Failed to connect: %v", err)
-	}
-	defer client.Close()
+	// Create main windows with improved spacing
+	orderBookWindow := NewWindow("deribit btcusdt - Orderbook", 10, 85, 580, 400, renderOrderBook, font)
+	orderBookWindow.IsActive = true
 
 	// Windows list
-	windows := []*Window{
+	windows := []*models.Window{
 		orderBookWindow,
 	}
 
+	// Create dropdown for instrument selection
+	instrumentDropdown := components.NewDropdown(
+		10, 50, 200,
+		[]string{"BTC-PERPETUAL", "ETH-PERPETUAL", "SOL-PERPETUAL", "XRP-PERPETUAL"},
+		"Instrument",
+		font)
+
+	// Create Deribit client and connect
+	deribitClient := client.NewDeribitClient("BTC-PERPETUAL", orderBookWindow)
+	err := deribitClient.Connect()
+	if err != nil {
+		log.Printf("Failed to connect: %v", err)
+	}
+	defer deribitClient.Close()
+
+	// Set handler for instrument change
+	instrumentDropdown.SetOnChangeHandler(func(idx int) {
+		selectedInstrument := instrumentDropdown.GetSelectedOption()
+
+		// TODO: move to constants
+		var symbol string
+		switch selectedInstrument {
+		case "BTC-PERPETUAL":
+			symbol = "btcusdt"
+		case "ETH-PERPETUAL":
+			symbol = "ethusdt"
+		case "SOL-PERPETUAL":
+			symbol = "solusdt"
+		case "XRP-PERPETUAL":
+			symbol = "xrpusdt"
+		}
+
+		orderBookWindow.Title = fmt.Sprintf("deribit %s - Orderbook", symbol)
+
+		// Connect to appropriate WebSocket for selected instrument
+		if deribitClient != nil {
+			deribitClient.Instrument = selectedInstrument
+			// Clear data while loading
+			orderBookWindow.Data = nil
+		}
+		fmt.Printf("Switched to instrument: %s\n", selectedInstrument)
+	})
+
+	// Main loop
 	for !rl.WindowShouldClose() {
 		// Update
 		for _, win := range windows {
 			win.Update(windows)
 		}
+		instrumentDropdown.Update()
 
 		// Draw
 		rl.BeginDrawing()
 		rl.ClearBackground(colors.ColorBackground)
 
-		// Draw UI elements
-		drawTopBar()
-		drawStatusBar()
+		rl.DrawText("Go Trader", 10, 10, 20, colors.ColorText)
+
+		// Draw instrument dropdown
+		instrumentDropdown.Draw()
 
 		// Draw all windows
 		for _, win := range windows {
 			win.Draw()
 		}
 
+		statusY := rl.GetScreenHeight() - 20
+		rl.DrawText("Connected to Deribit", 10, int32(statusY), 16, colors.ColorSubtext)
+
+		// Draw timestamp on the right
+		timeText := time.Now().Format("15:04:05")
+		timeWidth := rl.MeasureText(timeText, 16)
+		rl.DrawText(timeText, int32(rl.GetScreenWidth())-int32(timeWidth)-10, int32(statusY), 16, colors.ColorSubtext)
+
 		rl.EndDrawing()
 	}
 
+	rl.UnloadFont(font)
 	rl.CloseWindow()
 }
