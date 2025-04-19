@@ -13,6 +13,7 @@ type Window struct {
 	DragOffset       rl.Vector2
 	Content          func(*Window)
 	Data             interface{}
+	RecentTradeData  interface{}
 	IsActive         bool
 	ScrollPosition   float32
 	MaxScroll        float32
